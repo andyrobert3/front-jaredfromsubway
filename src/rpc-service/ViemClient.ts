@@ -64,10 +64,10 @@ const getInfuraWalletClient = () => {
   return infuraWalletClient;
 };
 
-const getInfuraPublicClient = () => {
+const getInfuraPublicClient = (rpcUrl?: string) => {
   if (!infuraPublicClient) {
     infuraPublicClient = getPublicClient({
-      httpRpcUrl: process.env.INFURA_RPC_URL as string,
+      httpRpcUrl: rpcUrl ?? (process.env.INFURA_RPC_URL as string),
     });
   }
   return infuraPublicClient;

@@ -77,7 +77,7 @@ export const broadcastTransaction = async (
     infuraResult.status === "rejected" &&
     quickNodeResults.every((result) => result.status === "rejected")
   ) {
-    throw new Error(`Failed to broadcast transaction to all RPC node}`);
+    throw new Error(`Failed to broadcast transaction to all RPC nodes`);
   }
 
   // Return the transaction hash from any RPC node that successfully broadcasted the transaction
