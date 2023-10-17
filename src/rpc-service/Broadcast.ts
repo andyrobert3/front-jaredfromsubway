@@ -19,15 +19,17 @@ const dummyWalletPrivateKeys = Array(NUM_DUMMY_PRIVATE_KEYS)
       process.env[`DUMMY_PRIVATE_KEY_${index + 1}`] as HexString,
   );
 
-const dummyWalletClients = dummyWalletPrivateKeys.map((privateKey, index) => {
-  const wsRpcUrl = process.env[
-    `QUICKNODE_WEBSOCKET_RPC_URL_${(index % NUM_WS_QUICKNODE_RPC_URLS) + 1}`
-  ] as string;
+const dummyQuickNodeWalletClients = dummyWalletPrivateKeys.map(
+  (privateKey, index) => {
+    const wsRpcUrl = process.env[
+      `QUICKNODE_WEBSOCKET_RPC_URL_${(index % NUM_WS_QUICKNODE_RPC_URLS) + 1}`
+    ] as string;
 
-  return getWalletClient(privateKey, {
-    wsRpcUrl,
-  });
-});
+    return getWalletClient(privateKey, {
+      wsRpcUrl,
+    });
+  },
+);
 
 /**
  * Creates, signs & broadcasts transaction to multiple RPC nodes
@@ -39,41 +41,61 @@ export const broadcastTransaction = async (
 ): Promise<HexString> => {
   const alchemyWalletClient = getAlchemyWalletClient();
   const infuraWalletClient = getInfuraWalletClient();
-  const quickNodeWalletClient = getQuickNodeWalletClient();
+
+  const quickNodeMevWalletClients = Array.from({
+    length: NUM_WS_QUICKNODE_RPC_URLS,
+  }).map((_, index) => {
+    const wsRpcUrl = process.env[
+      `QUICKNODE_WEBSOCKET_RPC_URL_${(index % NUM_WS_QUICKNODE_RPC_URLS) + 1}`
+    ] as string;
+
+    return getQuickNodeWalletClient(wsRpcUrl);
+  });
 
   logger.info(`Broadcasting frontrun transaction to multiple nodes`);
 
-  // Send transaction to multiple RPC nodes
-  const [alchemyResult, infuraResult, quickNodeResult] =
-    await Promise.allSettled([
-      alchemyWalletClient.sendTransaction(sendTxParams),
-      infuraWalletClient.sendTransaction(sendTxParams),
-      quickNodeWalletClient.sendTransaction(sendTxParams),
-    ]);
+  const sendFrontrunTxPromises = [
+    alchemyWalletClient.sendTransaction(sendTxParams),
+    infuraWalletClient.sendTransaction(sendTxParams),
+  ].concat(
+    quickNodeMevWalletClients.map((client) =>
+      client.sendTransaction(sendTxParams),
+    ),
+  );
 
-  logger.info(`Broadcasted frontrun transaction`);
+  // Send transaction to multiple RPC nodes
+  const [alchemyResult, infuraResult, ...quickNodeResults] =
+    await Promise.allSettled(sendFrontrunTxPromises);
+
+  logger.info(
+    `Broadcasted frontrun transaction to ${sendFrontrunTxPromises.length} nodes`,
+  );
 
   // Check if any of the RPC nodes failed to broadcast the transaction
   if (
     alchemyResult.status === "rejected" &&
     infuraResult.status === "rejected" &&
-    quickNodeResult.status === "rejected"
+    quickNodeResults.every((result) => result.status === "rejected")
   ) {
-    throw new Error(
-      `Failed to broadcast transaction to all RPC nodes: ${alchemyResult.reason}, ${infuraResult.reason}, ${quickNodeResult.reason}`,
-    );
+    throw new Error(`Failed to broadcast transaction to all RPC node}`);
   }
 
-  // Return the transaction hash from the first RPC node that successfully broadcasted the transaction
+  // Return the transaction hash from any RPC node that successfully broadcasted the transaction
   if (alchemyResult.status === "fulfilled") {
     return alchemyResult.value;
   }
+
   if (infuraResult.status === "fulfilled") {
     return infuraResult.value;
   }
 
-  // QuickNode propagation must be successful by elimination
-  return (quickNodeResult as PromiseFulfilledResult<`0x${string}`>).value;
+  const quickNodeFulfilledResults = quickNodeResults.find(
+    (result) => result.status === "fulfilled",
+  );
+
+  // QuickNode broadcasting must be successful by elimination
+  return (quickNodeFulfilledResults as PromiseFulfilledResult<`0x${string}`>)
+    .value;
 };
 
 /**
@@ -91,19 +113,23 @@ export const sendDummyTransactions = async ({
   maxPriorityFeePerGas: bigint;
 }) => {
   // Generate dummy transactions, to be sent to the network with higher gas fees than the original "withdraw" transaction
-  const dummyTxPromises = dummyWalletClients.map((dummyClient, index) => {
-    const destinationWalletClient =
-      dummyWalletClients[(index + 1) % dummyWalletClients.length];
+  const dummyTxPromises = dummyQuickNodeWalletClients.map(
+    (dummyClient, index) => {
+      const destinationWalletClient =
+        dummyQuickNodeWalletClients[
+          (index + 1) % dummyQuickNodeWalletClients.length
+        ];
 
-    // Simple transfer transaction
-    return dummyClient.sendTransaction({
-      to: destinationWalletClient.account.address,
-      maxFeePerGas,
-      maxPriorityFeePerGas,
-      data: "0x",
-      value: parseUnits("0.0001", 18),
-    });
-  });
+      // Simple transfer transaction
+      return dummyClient.sendTransaction({
+        to: destinationWalletClient.account.address,
+        maxFeePerGas,
+        maxPriorityFeePerGas,
+        data: "0x",
+        value: parseUnits("0.0001", 18),
+      });
+    },
+  );
 
   logger.info(`Sending ${dummyTxPromises.length} dummy transactions...`);
 

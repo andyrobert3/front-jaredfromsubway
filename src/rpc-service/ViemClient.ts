@@ -73,22 +73,24 @@ const getInfuraPublicClient = () => {
   return infuraPublicClient;
 };
 
-const getQuickNodeWalletClient = () => {
+const getQuickNodeWalletClient = (wsRpcUrl?: string) => {
   if (!quickNodeWalletClient) {
     quickNodeWalletClient = getWalletClient(
       process.env.PRIVATE_KEY as HexString,
       {
-        wsRpcUrl: process.env.QUICKNODE_WEBSOCKET_RPC_URL_1 as string,
+        wsRpcUrl:
+          wsRpcUrl ?? (process.env.QUICKNODE_WEBSOCKET_RPC_URL_1 as string),
       },
     );
   }
   return quickNodeWalletClient;
 };
 
-const getQuickNodePublicClient = () => {
+const getQuickNodePublicClient = (wsRpcUrl?: string) => {
   if (!quickNodePublicClient) {
     quickNodePublicClient = getPublicClient({
-      httpRpcUrl: process.env.QUICKNODE_WEBSOCKET_RPC_URL_1 as string,
+      wsRpcUrl:
+        wsRpcUrl ?? (process.env.QUICKNODE_WEBSOCKET_RPC_URL_1 as string),
     });
   }
 
