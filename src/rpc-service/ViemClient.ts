@@ -3,11 +3,12 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  PublicClient,
   WalletClient,
   webSocket,
 } from "viem";
 import { polygon } from "viem/chains";
-import { HexString } from "./rpcService/alchemy";
+import { HexString } from "./Alchemy";
 import { RequireAtLeastOne } from "alchemy-sdk";
 
 export const getWalletClient = (
@@ -39,6 +40,9 @@ let alchemyWalletClient: WalletClient;
 let infuraWalletClient: WalletClient;
 let quickNodeWalletClient: WalletClient;
 
+let infuraPublicClient: PublicClient;
+let quickNodePublicClient: PublicClient;
+
 const getAlchemyWalletClient = () => {
   if (!alchemyWalletClient) {
     alchemyWalletClient = getWalletClient(
@@ -61,9 +65,12 @@ const getInfuraWalletClient = () => {
 };
 
 const getInfuraPublicClient = () => {
-  return getPublicClient({
-    httpRpcUrl: process.env.INFURA_RPC_URL as string,
-  });
+  if (!infuraPublicClient) {
+    infuraPublicClient = getPublicClient({
+      httpRpcUrl: process.env.INFURA_RPC_URL as string,
+    });
+  }
+  return infuraPublicClient;
 };
 
 const getQuickNodeWalletClient = () => {
@@ -79,9 +86,13 @@ const getQuickNodeWalletClient = () => {
 };
 
 const getQuickNodePublicClient = () => {
-  return getPublicClient({
-    httpRpcUrl: process.env.QUICKNODE_WEBSOCKET_RPC_URL_1 as string,
-  });
+  if (!quickNodePublicClient) {
+    quickNodePublicClient = getPublicClient({
+      httpRpcUrl: process.env.QUICKNODE_WEBSOCKET_RPC_URL_1 as string,
+    });
+  }
+
+  return quickNodePublicClient;
 };
 
 export {

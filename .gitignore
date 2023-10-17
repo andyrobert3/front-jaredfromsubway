@@ -3,3 +3,4 @@ frontrun-mev.iml
 node_modules
 dist
 .env
+app.log

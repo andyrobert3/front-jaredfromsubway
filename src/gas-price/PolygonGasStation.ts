@@ -1,7 +1,7 @@
 import axios from "axios";
 import { parseGwei } from "viem";
 
-export type GasInfo = {
+export type PolygonGasStationInfo = {
   safeLow: {
     maxPriorityFee: number;
     maxFee: number;
@@ -25,7 +25,7 @@ const POLYGON_GAS_STATION_URL = "https://gasstation.polygon.technology/v2";
  * Returns the current gas price for the Polygon network in gwei
  * Uses the Polygon Gas Station API (Fast fees)
  */
-export const getPolygonGasPrice = async (): Promise<{
+export const getPolygonGasStationprice = async (): Promise<{
   maxPriorityFeePerGas: bigint;
   maxFeePerGas: bigint;
   estimatedBaseFee: bigint;
@@ -34,7 +34,7 @@ export const getPolygonGasPrice = async (): Promise<{
   const {
     fast: { maxPriorityFee, maxFee },
     estimatedBaseFee,
-  } = response.data as GasInfo;
+  } = response.data as PolygonGasStationInfo;
 
   return {
     maxPriorityFeePerGas: parseGwei(maxPriorityFee.toString(10)),

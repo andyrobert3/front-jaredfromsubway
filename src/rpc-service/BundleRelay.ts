@@ -1,11 +1,17 @@
-import { BigNumber, ethers, PopulatedTransaction } from "ethers";
+import { BigNumber, ethers, PopulatedTransaction, providers } from "ethers";
 import {
   FlashbotsBundleProvider,
   FlashbotsBundleTransaction,
+  FlashbotsTransaction,
 } from "@flashbots/ethers-provider-bundle";
 import { polygon } from "viem/chains";
-import { getEthersBankContract } from "../bankContract";
 import { getAddress } from "viem";
+import { BANK_CONTRACT_ADDRESS, withdrawFnAbi } from "../BankContract";
+
+// Ethers contract instance for the bank contract
+export const getEthersBankContract = (provider: providers.Provider) => {
+  return new ethers.Contract(BANK_CONTRACT_ADDRESS, [withdrawFnAbi], provider);
+};
 
 const ethersProvider = new ethers.providers.JsonRpcProvider(
   { url: process.env.INFURA_RPC_URL as string },
@@ -26,9 +32,9 @@ const destinationAddress = "0xe60A3306924f661425B1d85D0FA981820124Af65";
  * Marlin Relay will forward to node RPC provided by "ethersProvider"
  * @param bundledTransactions
  */
-export const sendBundledTransactions = async (
+export const broadcastBundledTransactions = async (
   bundledTransactions: FlashbotsBundleTransaction[],
-) => {
+): Promise<FlashbotsTransaction> => {
   await ethersProvider.ready;
 
   // wrap it with the marlin relay provider
@@ -42,14 +48,7 @@ export const sendBundledTransactions = async (
   const blk = await ethersProvider.getBlockNumber();
 
   // send bundle to marlin relay
-  const result = await flashBundleProvider.sendBundle(
-    bundledTransactions,
-    blk + 1,
-  );
-
-  console.log("sendBundleResult", result);
-
-  return result;
+  return flashBundleProvider.sendBundle(bundledTransactions, blk + 1);
 };
 
 /**
@@ -135,3 +134,18 @@ function createUnsignedTransaction({
     type: 2, // EIP-1559 transaction
   };
 }
+
+export const sendBundledTransactions = async (
+  mevTxDetails: {
+    maxPriorityFeePerGas: BigNumber;
+    maxFeePerGas: BigNumber;
+    data: string;
+  } & Omit<PopulatedTransaction, "maxPriorityFeePerGas" | "maxFeePerGas">,
+  numDummyTx: number,
+) => {
+  const bundledTransactions = await generateBundledTransactions(
+    mevTxDetails,
+    numDummyTx,
+  );
+  return await broadcastBundledTransactions(bundledTransactions);
+};

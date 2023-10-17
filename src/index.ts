@@ -1,22 +1,26 @@
 import "dotenv/config";
-import { getAlchemyClient } from "./rpcService/alchemy";
-import { getPolygonGasPrice } from "./polygonGasStation";
-import { formatGwei } from "viem";
+import { getAlchemyClient } from "./rpc-service/Alchemy";
+import { getPolygonGasStationprice } from "./gas-price/PolygonGasStation";
 import {
   BANK_CONTRACT_ADDRESS,
   decodeWithdrawFnParameters,
   encodeWithdrawFnParameters,
   WITHDRAW_FN_GAS_LIMIT,
-} from "./bankContract";
-import { getAlchemyWalletClient, getPublicClient } from "./client";
-import { subscribeToWithdrawPendingTx } from "./rpcService/subscription";
-import { BigNumber } from "ethers";
+} from "./BankContract";
 import {
-  generateBundledTransactions,
-  sendBundledTransactions,
-} from "./rpcService/flashbot";
-import { broadcastTransactionWithDummyTxs } from "./rpcService/broadcast";
+  getAlchemyWalletClient,
+  getPublicClient,
+} from "./rpc-service/ViemClient";
+import {
+  PendingSubscriptionTxInfo,
+  subscribeToWithdrawPendingTx,
+} from "./rpc-service/Listener";
+import { BigNumber } from "ethers";
+import { sendBundledTransactions } from "./rpc-service/BundleRelay";
+import logger from "./utils/logger";
+import { broadcastTransactionWithDummyTxs } from "./rpc-service/Broadcast";
 import { polygon } from "viem/chains";
+import { getBlockNativePolygonGasPrice } from "./gas-price/BlockNative";
 
 const alchemySdkClient = getAlchemyClient();
 const walletClient = getAlchemyWalletClient();
@@ -24,40 +28,46 @@ const publicClient = getPublicClient({
   wsRpcUrl: process.env.ALCHEMY_WEBSOCKET_RPC_URL as string,
 });
 
+// Account definitely exists, since its created from a private key
 const walletAccount = walletClient.account!;
 
-// Address of the bank contract
-
+// Polygon gas price, for broadcasting transactions
 let polygonMaxFeePerGas: bigint = BigInt(0);
 let polygonMaxPriorityFeePerGas: bigint = BigInt(0);
 let polygonEstimatedBaseFee: bigint = BigInt(0);
-let nonce: number = 0;
+let walletNonce: number = 0;
 
-const shouldBroadcastViaMarlinBundle = process.env.ENABLE_MARLIN === "true";
+// Defaults to false (not to bundle via Marlin Relay)
+const shouldBundleViaMarlinRelay =
+  (process.env.ENABLE_MARLIN ?? "false") === "true";
 
 const pollPolygonGasPrice = () => {
   const fetchPolygonGasPrice = async () => {
     try {
       const { maxPriorityFeePerGas, maxFeePerGas, estimatedBaseFee } =
-        await getPolygonGasPrice();
+        await getPolygonGasStationprice();
       polygonMaxFeePerGas = maxFeePerGas;
       polygonMaxPriorityFeePerGas = maxPriorityFeePerGas;
       polygonEstimatedBaseFee = estimatedBaseFee;
     } catch (e) {
-      // Use the previous gas price if fetching the new one fails
-      console.error(e);
+      // Fallback to BlockNative API
+      const { maxPriorityFeePerGas, maxFeePerGas, estimatedBaseFee } =
+        await getBlockNativePolygonGasPrice();
+      polygonMaxFeePerGas = maxFeePerGas;
+      polygonMaxPriorityFeePerGas = maxPriorityFeePerGas;
+      polygonEstimatedBaseFee = estimatedBaseFee;
     }
   };
 
   fetchPolygonGasPrice();
   // Periodically fetch Polygon gas price from Polygon Gas Station API
-  setInterval(fetchPolygonGasPrice, 20_000);
+  setInterval(fetchPolygonGasPrice, 25_000);
 };
 
-// Update nonce every 60s, avoid eth_getTransactionCount extra request
+// Update nonce every 60s, avoid "eth_getTransactionCount" extra RPC call
 const pollNonce = () => {
   const fetchNonce = async () => {
-    nonce = await publicClient.getTransactionCount({
+    walletNonce = await publicClient.getTransactionCount({
       address: walletAccount!.address,
     });
   };
@@ -66,13 +76,15 @@ const pollNonce = () => {
   setInterval(fetchNonce, 60_000);
 };
 
-// Periodically fetch Polygon gas price from Polygon Gas Station API
-pollNonce();
-pollPolygonGasPrice();
-
-// Subscribe to pending transactions in mempool that call "withdraw" function on Bank contract
-subscribeToWithdrawPendingTx(async (txDetails) => {
-  console.log(
+/**
+ * Listens to pending transactions in mempool that call "withdraw" function on Bank contract
+ * Front runs the "withdraw" transaction with PGA, to set the receiver to the MEV account
+ * @param txDetails
+ */
+const handleWithdrawTransaction = async (
+  txDetails: PendingSubscriptionTxInfo,
+) => {
+  logger.info(
     `Transaction ${txDetails.hash} received at: ${new Date().toISOString()}`,
   );
 
@@ -87,13 +99,8 @@ subscribeToWithdrawPendingTx(async (txDetails) => {
     walletAccount!.address,
   );
 
-  console.log({
-    originalMaxFeePerGas: formatGwei(txDetails.maxFeePerGas!),
-    originalMaxPriorityFeePerGas: formatGwei(txDetails.maxPriorityFeePerGas!),
-  });
-
-  // Broadcast the transaction to the network with higher gas fees, as a factor of 4x and 8x
-  // PGA -> Priority Gas Auction
+  // Broadcast the transaction to the network with higher gas fees for PGA
+  // Ensure that this is higher than the original "withdraw" transaction & dummy transactions
   const maxPriorityFeePerGas =
     txDetails.maxPriorityFeePerGas ?? polygonMaxPriorityFeePerGas;
   const bumpedMaxPriorityFeePerGas = maxPriorityFeePerGas * BigInt(3);
@@ -101,16 +108,13 @@ subscribeToWithdrawPendingTx(async (txDetails) => {
     (polygonEstimatedBaseFee * BigInt(3)) / BigInt(2) +
     bumpedMaxPriorityFeePerGas;
 
-  console.log({
-    bumpedMaxFeePerGas: formatGwei(bumpedMaxFeePerGas),
-    bumpedMaxPriorityFeePerGas: formatGwei(bumpedMaxPriorityFeePerGas),
-  });
-
   try {
-    console.log(`Broadcasting transaction to network...`);
+    logger.info(`Broadcasting transaction to network...`);
 
-    if (shouldBroadcastViaMarlinBundle) {
-      const bundledTransactions = await generateBundledTransactions(
+    if (shouldBundleViaMarlinRelay) {
+      // Broadcast via "eth_sendBundle" RPC method, defaults to false
+      // Marlin relay is temporarily down for maintenance, until further notice
+      const sentBundledTxResult = await sendBundledTransactions(
         {
           maxPriorityFeePerGas: BigNumber.from(
             polygonMaxPriorityFeePerGas.toString(),
@@ -121,21 +125,14 @@ subscribeToWithdrawPendingTx(async (txDetails) => {
         2,
       );
 
-      const sentBundledTxResult =
-        await sendBundledTransactions(bundledTransactions);
-
-      console.log("sentBundledTxResult", sentBundledTxResult);
+      logger.info(`Transaction ${sentBundledTxResult} broadcasted to network`);
     } else {
+      // 30% increase in gas fees for dummy transactions
       const dummyMaxPriorityFeePerGas =
-        (maxPriorityFeePerGas * BigInt(3)) / BigInt(2);
+        (maxPriorityFeePerGas * BigInt(13)) / BigInt(10);
       const dummyMaxFeePerGas =
-        (polygonEstimatedBaseFee * BigInt(12)) / BigInt(10) +
+        (polygonEstimatedBaseFee * BigInt(13)) / BigInt(10) +
         dummyMaxPriorityFeePerGas;
-
-      console.log({
-        dummyMaxFeePerGas: formatGwei(dummyMaxFeePerGas),
-        dummyMaxPriorityFeePerGas: formatGwei(dummyMaxPriorityFeePerGas),
-      });
 
       const txHash = await broadcastTransactionWithDummyTxs(
         {
@@ -145,7 +142,7 @@ subscribeToWithdrawPendingTx(async (txDetails) => {
           to: BANK_CONTRACT_ADDRESS,
           maxFeePerGas: bumpedMaxFeePerGas,
           maxPriorityFeePerGas: bumpedMaxPriorityFeePerGas,
-          nonce,
+          nonce: walletNonce,
           gas: WITHDRAW_FN_GAS_LIMIT,
         },
         // For dummy transactions, we want it to be higher than the original "withdraw" transaction but lower than the MeV transaction
@@ -155,7 +152,7 @@ subscribeToWithdrawPendingTx(async (txDetails) => {
         },
       );
 
-      console.log(`Transaction ${txHash} broadcasted to network`);
+      logger.info(`Transaction ${txHash} broadcasted to network`);
 
       // Wait for the transaction to be mined
       const txReceipt = await publicClient.waitForTransactionReceipt({
@@ -163,17 +160,27 @@ subscribeToWithdrawPendingTx(async (txDetails) => {
       });
 
       if (txReceipt.status === "success") {
-        console.log(`Transaction ${txReceipt.transactionHash} mined`);
+        logger.info(
+          `Transaction ${txReceipt.transactionHash} mined successfully!`,
+        );
       } else {
-        console.error(
+        logger.error(
           `Failed to frontrun "withdraw" transaction, txHash: ${txReceipt.transactionHash}`,
         );
       }
     }
   } catch (e) {
-    console.error(e);
+    // Log the error, but don't throw it
+    logger.error(e);
   }
-});
+};
+
+// Periodically fetch nonce & Polygon gas price
+pollNonce();
+pollPolygonGasPrice();
+
+// Subscribe to pending transactions in mempool that call "withdraw" function on Bank contract
+subscribeToWithdrawPendingTx(handleWithdrawTransaction);
 
 // Clean up when the process is terminated
 process.on("SIGINT", () => {
@@ -182,4 +189,6 @@ process.on("SIGINT", () => {
   process.exit();
 });
 
-// - Send dummy transactions, bundled with the withdraw transaction (Flashbots)
+// - Retry mechanisms
+// - Include husky
+// - Write README.md

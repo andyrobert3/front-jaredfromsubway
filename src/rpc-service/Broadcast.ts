@@ -1,11 +1,33 @@
-import { HexString } from "./alchemy";
+import { HexString } from "./Alchemy";
 import {
   getAlchemyWalletClient,
   getInfuraWalletClient,
   getQuickNodeWalletClient,
   getWalletClient,
-} from "../client";
+} from "./ViemClient";
 import { parseUnits, SendTransactionParameters } from "viem";
+import logger from "../utils/logger";
+
+// Number is dependent on the number of dummy private keys in the .env file
+const NUM_DUMMY_PRIVATE_KEYS = 15;
+const NUM_WS_QUICKNODE_RPC_URLS = 4;
+
+const dummyWalletPrivateKeys = Array(NUM_DUMMY_PRIVATE_KEYS)
+  .fill(null)
+  .map(
+    (value, index) =>
+      process.env[`DUMMY_PRIVATE_KEY_${index + 1}`] as HexString,
+  );
+
+const dummyWalletClients = dummyWalletPrivateKeys.map((privateKey, index) => {
+  const wsRpcUrl = process.env[
+    `QUICKNODE_WEBSOCKET_RPC_URL_${(index % NUM_WS_QUICKNODE_RPC_URLS) + 1}`
+  ] as string;
+
+  return getWalletClient(privateKey, {
+    wsRpcUrl,
+  });
+});
 
 /**
  * Creates, signs & broadcasts transaction to multiple RPC nodes
@@ -19,6 +41,8 @@ export const broadcastTransaction = async (
   const infuraWalletClient = getInfuraWalletClient();
   const quickNodeWalletClient = getQuickNodeWalletClient();
 
+  logger.info(`Broadcasting frontrun transaction to multiple nodes`);
+
   // Send transaction to multiple RPC nodes
   const [alchemyResult, infuraResult, quickNodeResult] =
     await Promise.allSettled([
@@ -26,6 +50,8 @@ export const broadcastTransaction = async (
       infuraWalletClient.sendTransaction(sendTxParams),
       quickNodeWalletClient.sendTransaction(sendTxParams),
     ]);
+
+  logger.info(`Broadcasted frontrun transaction`);
 
   // Check if any of the RPC nodes failed to broadcast the transaction
   if (
@@ -46,6 +72,7 @@ export const broadcastTransaction = async (
     return infuraResult.value;
   }
 
+  // QuickNode propagation must be successful by elimination
   return (quickNodeResult as PromiseFulfilledResult<`0x${string}`>).value;
 };
 
@@ -63,68 +90,27 @@ export const sendDummyTransactions = async ({
   maxFeePerGas: bigint;
   maxPriorityFeePerGas: bigint;
 }) => {
-  // Generate dummy transactions, to be sent to the network with higher gas fees
-  const dummyWalletClient1 = getWalletClient(
-    process.env.DUMMY_PRIVATE_KEY_1 as HexString,
-    { wsRpcUrl: process.env.QUICKNODE_WEBSOCKET_RPC_URL_1 as string },
-  );
-  const dummyWalletClient2 = getWalletClient(
-    process.env.DUMMY_PRIVATE_KEY_2 as HexString,
-    { wsRpcUrl: process.env.QUICKNODE_WEBSOCKET_RPC_URL_2 as string },
-  );
-  const dummyWalletClient3 = getWalletClient(
-    process.env.DUMMY_PRIVATE_KEY_3 as HexString,
-    { wsRpcUrl: process.env.QUICKNODE_WEBSOCKET_RPC_URL_3 as string },
-  );
-  const dummyWalletClient4 = getWalletClient(
-    process.env.DUMMY_PRIVATE_KEY_4 as HexString,
-    { wsRpcUrl: process.env.QUICKNODE_WEBSOCKET_RPC_URL_4 as string },
-  );
+  // Generate dummy transactions, to be sent to the network with higher gas fees than the original "withdraw" transaction
+  const dummyTxPromises = dummyWalletClients.map((dummyClient, index) => {
+    const destinationWalletClient =
+      dummyWalletClients[(index + 1) % dummyWalletClients.length];
+
+    // Simple transfer transaction
+    return dummyClient.sendTransaction({
+      to: destinationWalletClient.account.address,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      data: "0x",
+      value: parseUnits("0.0001", 18),
+    });
+  });
+
+  logger.info(`Sending ${dummyTxPromises.length} dummy transactions...`);
 
   // Send dummy transactions to the network
-  const dummyTx1Promise = dummyWalletClient1.sendTransaction({
-    to: dummyWalletClient2.account.address,
-    maxFeePerGas,
-    maxPriorityFeePerGas,
-    data: "0x",
-    value: parseUnits("0.0001", 18),
-  });
+  const dummyTxResults = await Promise.allSettled(dummyTxPromises);
 
-  const dummyTx2Promise = dummyWalletClient2.sendTransaction({
-    to: dummyWalletClient3.account.address,
-    maxFeePerGas,
-    maxPriorityFeePerGas,
-    data: "0x",
-    value: parseUnits("0.0001", 18),
-  });
-
-  const dummyTx3Promise = dummyWalletClient3.sendTransaction({
-    to: dummyWalletClient4.account.address,
-    maxFeePerGas,
-    maxPriorityFeePerGas,
-    data: "0x",
-    value: parseUnits("0.0001", 18),
-  });
-
-  const dummyTx4Promise = dummyWalletClient4.sendTransaction({
-    to: dummyWalletClient1.account.address,
-    maxFeePerGas,
-    maxPriorityFeePerGas,
-    data: "0x",
-    value: parseUnits("0.0001", 18),
-  });
-
-  console.log(`Sending dummy transactions...`);
-
-  // Send dummy transactions to the network
-  const dummyTxResults = await Promise.allSettled([
-    dummyTx1Promise,
-    dummyTx2Promise,
-    dummyTx3Promise,
-    dummyTx4Promise,
-  ]);
-
-  console.log(`Dummy transactions sent!`);
+  logger.info(`Sent dummy transactions!`);
 
   // Check if any of the dummy transactions failed to broadcast
   const failedDummyTxs = dummyTxResults.filter(
@@ -132,10 +118,8 @@ export const sendDummyTransactions = async ({
   );
 
   if (failedDummyTxs.length > 0) {
-    throw new Error(
-      `Failed to broadcast dummy transactions: ${failedDummyTxs.map(
-        (result) => (result as PromiseRejectedResult).reason,
-      )}`,
+    logger.warn(
+      `Failed to broadcast ${failedDummyTxs.length} dummy transactions: ${failedDummyTxs})`,
     );
   }
 
@@ -143,7 +127,7 @@ export const sendDummyTransactions = async ({
 };
 
 /**
- * Broadcasts the original "withdraw" transaction, together with dummy transactions to the network with higher gas fees
+ * Broadcasts the original "withdraw" transaction, together with dummy transactions to the network with higher gas fees than the original "withdraw" transaction
  * @param sendTxParams
  * @param maxFeePerGas
  */
@@ -176,7 +160,3 @@ export const broadcastTransactionWithDummyTxs = async (
 
   return mevTxResult.value;
 };
-
-// 2. Try fastlane -> https://fastlane-labs.gitbook.io/polygon-fastlane/searcher-guides/searcher-bundles/full-example
-// 3. Wait for Merlin
-// 4. Clean up code -> Cleaner error handling, retry mechanisms, etc.

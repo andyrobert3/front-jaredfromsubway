@@ -7,7 +7,7 @@ import {
 
 export type HexString = `0x${string}`;
 
-export type PendingTransaction = {
+export type AlchemyPendingTxDetails = {
   blockHash: null;
   blockNumber: null;
   from: HexString;
@@ -34,6 +34,7 @@ const settings: AlchemySettings = {
   apiKey: process.env.ALCHEMY_API_KEY,
   network: Network.MATIC_MAINNET,
 };
+
 let alchemyClient: Alchemy;
 
 export const getAlchemyClient = () => {
@@ -43,10 +44,21 @@ export const getAlchemyClient = () => {
   return alchemyClient;
 };
 
+/**
+ * Subscribe to pending transactions in the mempool for the bank contract "withdraw" function
+ * JSON RPC WebSocket subscription method "alchemy_pendingTransactions" provided by Alchemy
+ * Ability to filter by "toAddress" and "fromAddress", with single RPC call
+ *
+ * https://docs.alchemy.com/reference/alchemy-pendingtransactions
+ *
+ * @param alchemy
+ * @param addressToMonitor
+ * @param callback
+ */
 export const alchemySubscribeToPendingTx = (
   alchemy: Alchemy,
   addressToMonitor: string,
-  callback: (tx: PendingTransaction) => void,
+  callback: (tx: AlchemyPendingTxDetails) => void,
 ) => {
   return alchemy.ws.on(
     {

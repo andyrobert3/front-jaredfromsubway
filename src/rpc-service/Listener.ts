@@ -2,22 +2,27 @@ import {
   alchemySubscribeToPendingTx,
   getAlchemyClient,
   HexString,
-} from "./alchemy";
-import { getInfuraPublicClient, getQuickNodePublicClient } from "../client";
-import { Address, hexToBigInt } from "viem";
-import { BANK_CONTRACT_ADDRESS, withdrawFnSelector } from "../bankContract";
+} from "./Alchemy";
+import { getInfuraPublicClient, getQuickNodePublicClient } from "./ViemClient";
+import { Address, hexToBigInt, PublicClient } from "viem";
+import { BANK_CONTRACT_ADDRESS, withdrawFnSelector } from "../BankContract";
 import Bottleneck from "bottleneck";
 import { privateKeyToAccount } from "viem/accounts";
+import logger from "../utils/logger";
 
 const alchemySdkClient = getAlchemyClient();
-const infuraWalletClient = getInfuraPublicClient();
-const quickNodeWalletClient = getQuickNodePublicClient();
+const infuraPublicClient = getInfuraPublicClient();
+const quickNodePublicClient = getQuickNodePublicClient();
 
+// Rate limiter to prevent spamming the RPC provider (429 errors)
 const limiter = new Bottleneck({
   maxConcurrent: 3, // Number of requests that can run concurrently
   minTime: 50, // Minimum time (in milliseconds) between subsequent tasks
 });
 
+/**
+ * Check if a transaction is a valid "withdraw" transaction and if it is not from the MEV account
+ */
 const isValidWithdrawBankTx = (
   fromAddress: Address,
   toAddress: Address,
@@ -40,22 +45,28 @@ const isValidWithdrawBankTx = (
   );
 };
 
+export type PendingSubscriptionTxInfo = {
+  hash: HexString;
+  input: HexString;
+  maxPriorityFeePerGas?: bigint;
+  maxFeePerGas?: bigint;
+};
+
 /**
  * Subscribe to pending transactions in the mempool for the bank contract "withdraw" function
  */
 export const subscribeToWithdrawPendingTx = (
-  callback: (txDetails: {
-    hash: HexString;
-    input: HexString;
-    maxPriorityFeePerGas?: bigint;
-    maxFeePerGas?: bigint;
-  }) => void,
+  callback: (txDetails: PendingSubscriptionTxInfo) => void,
 ) => {
+  // Store the lower case hash of the transaction to prevent duplicates from being processed
   const seenPendingTxHashes = new Set<string>();
 
   // Handler for pending transactions in mempool
-  const handlePendingTx = async (hash: HexString) => {
-    const tx = await quickNodeWalletClient.getTransaction({
+  const handlePendingTx = async (
+    hash: HexString,
+    publicClient: PublicClient,
+  ) => {
+    const tx = await publicClient.getTransaction({
       hash,
     });
 
@@ -76,10 +87,12 @@ export const subscribeToWithdrawPendingTx = (
       maxPriorityFeePerGas: tx.maxPriorityFeePerGas,
     });
   };
-  const throttleHandlePendingTx = (hash: HexString) =>
-    limiter.schedule(() => handlePendingTx(hash));
+  const throttleHandlePendingTx = (
+    hash: HexString,
+    publicClient: PublicClient,
+  ) => limiter.schedule(() => handlePendingTx(hash, publicClient));
 
-  console.log(`Listening to pending transactions in mempool...`);
+  logger.info(`Listening to pending transactions in mempool...`);
 
   // Subscribe to pending transactions in mempool with Alchemy special RPC
   alchemySubscribeToPendingTx(alchemySdkClient, BANK_CONTRACT_ADDRESS, (tx) => {
@@ -100,16 +113,22 @@ export const subscribeToWithdrawPendingTx = (
   });
 
   // Subscribe to pending transactions in mempool with QuickNode
-  quickNodeWalletClient.watchPendingTransactions({
+  quickNodePublicClient.watchPendingTransactions({
     onTransactions: async (hashes) => {
-      await Promise.allSettled(hashes.map(throttleHandlePendingTx));
+      await Promise.allSettled(
+        hashes.map((hash) =>
+          throttleHandlePendingTx(hash, quickNodePublicClient),
+        ),
+      );
     },
   });
 
   // Subscribe to pending transactions in mempool with Infura
-  infuraWalletClient.watchPendingTransactions({
+  infuraPublicClient.watchPendingTransactions({
     onTransactions: async (hashes) => {
-      await Promise.allSettled(hashes.map(throttleHandlePendingTx));
+      await Promise.allSettled(
+        hashes.map((hash) => throttleHandlePendingTx(hash, infuraPublicClient)),
+      );
     },
   });
 };
