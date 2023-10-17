@@ -5,7 +5,7 @@ import {
   getFunctionSelector,
   parseAbiItem,
 } from "viem";
-import { HexString } from "./alchemy";
+import { HexString } from "./rpcService/alchemy";
 import { ethers, providers } from "ethers";
 
 export const BANK_CONTRACT_ADDRESS =

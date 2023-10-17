@@ -7,7 +7,7 @@ import {
   webSocket,
 } from "viem";
 import { polygon } from "viem/chains";
-import { HexString } from "./alchemy";
+import { HexString } from "./rpcService/alchemy";
 import { RequireAtLeastOne } from "alchemy-sdk";
 
 export const getWalletClient = (

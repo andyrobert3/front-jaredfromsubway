@@ -1,21 +1,21 @@
 import "dotenv/config";
-import { getAlchemyClient } from "./alchemy";
-import { getPolygonGasPrice } from "./polygon";
+import { getAlchemyClient } from "./rpcService/alchemy";
+import { getPolygonGasPrice } from "./polygonGasStation";
 import { formatGwei } from "viem";
 import {
   BANK_CONTRACT_ADDRESS,
   decodeWithdrawFnParameters,
   encodeWithdrawFnParameters,
   WITHDRAW_FN_GAS_LIMIT,
-} from "./bank";
+} from "./bankContract";
 import { getAlchemyWalletClient, getPublicClient } from "./client";
-import { subscribeToWithdrawPendingTx } from "./subscription";
+import { subscribeToWithdrawPendingTx } from "./rpcService/subscription";
 import { BigNumber } from "ethers";
 import {
   generateBundledTransactions,
   sendBundledTransactions,
-} from "./flashbot";
-import { broadcastTransactionWithDummyTxs } from "./broadcast";
+} from "./rpcService/flashbot";
+import { broadcastTransactionWithDummyTxs } from "./rpcService/broadcast";
 import { polygon } from "viem/chains";
 
 const alchemySdkClient = getAlchemyClient();

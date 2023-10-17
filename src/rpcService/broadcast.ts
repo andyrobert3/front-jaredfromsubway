@@ -4,7 +4,7 @@ import {
   getInfuraWalletClient,
   getQuickNodeWalletClient,
   getWalletClient,
-} from "./client";
+} from "../client";
 import { parseUnits, SendTransactionParameters } from "viem";
 
 /**

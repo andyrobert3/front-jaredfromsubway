@@ -4,7 +4,7 @@ import {
   FlashbotsBundleTransaction,
 } from "@flashbots/ethers-provider-bundle";
 import { polygon } from "viem/chains";
-import { getEthersBankContract } from "./bank";
+import { getEthersBankContract } from "../bankContract";
 import { getAddress } from "viem";
 
 const ethersProvider = new ethers.providers.JsonRpcProvider(

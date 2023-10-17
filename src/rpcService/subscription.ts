@@ -3,9 +3,9 @@ import {
   getAlchemyClient,
   HexString,
 } from "./alchemy";
-import { getInfuraPublicClient, getQuickNodePublicClient } from "./client";
+import { getInfuraPublicClient, getQuickNodePublicClient } from "../client";
 import { Address, hexToBigInt } from "viem";
-import { BANK_CONTRACT_ADDRESS, withdrawFnSelector } from "./bank";
+import { BANK_CONTRACT_ADDRESS, withdrawFnSelector } from "../bankContract";
 import Bottleneck from "bottleneck";
 import { privateKeyToAccount } from "viem/accounts";
 
