@@ -22,7 +22,7 @@ $ pnpm install
 ### Run the Script
 
 ```bash
-$ pnpm run dev
+$ pnpm run start
 ```
 
 ## Strategy
