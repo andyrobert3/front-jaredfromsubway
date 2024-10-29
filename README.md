@@ -1,8 +1,8 @@
-# Frontrunning Bank Contract
+# 🏦 Frontrunning Bank Contract
 
 ## Overview
 
-Create a script that targets the withdraw function of the Bank contract, aiming to extract funds. The contract details and setup instructions are as follows:
+Intercept and front-run the attacker's transaction to claim the reward prize for ourselves by utilizing the pending transaction input data.
 
 - Contract Address: `0xD76465f2026F2ed2BC0016608E8354A99D8d60aC`
 - Network: **Polygon Mainnet**
